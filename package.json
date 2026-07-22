@@ -6,6 +6,7 @@
   "type": "module",
   "workspaces": [
     "agents",
+    "apps/*",
     "cli",
     "common",
     "evals",
@@ -20,6 +21,8 @@
     "start-cli": "bun --cwd cli dev",
     "dev": "bun start-cli",
     "dev:freebuff": "FREEBUFF_MODE=true bun --cwd cli dev",
+    "dev:desktop": "bun --cwd apps/desktop dev",
+    "backend": "bun scripts/local-backend.ts",
     "release:cli": "bun run --cwd=cli release",
     "release:sdk": "bun run --cwd=sdk release",
     "release:freebuff": "bun run --cwd=freebuff release",

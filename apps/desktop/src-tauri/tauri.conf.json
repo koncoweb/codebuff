@@ -1,0 +1,46 @@
+{
+  "$schema": "https://raw.githubusercontent.com/nickelpack/tauri/dev/crates/tauri-config-schema/schema.json",
+  "productName": "KoncoVibe",
+  "version": "1.0.0",
+  "identifier": "id.koncoweb.koncovibe",
+  "build": {
+    "beforeDevCommand": "bun run dev",
+    "devUrl": "http://localhost:5173",
+    "beforeBuildCommand": "bun run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "KoncoVibe — AI Vibe Coding Studio",
+        "width": 1400,
+        "height": 900,
+        "minWidth": 1024,
+        "minHeight": 700,
+        "resizable": true,
+        "fullscreen": false,
+        "center": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "category": "DeveloperTool",
+    "shortDescription": "AI Vibe Coding Studio",
+    "longDescription": "KoncoVibe — aplikasi desktop AI Vibe Coding untuk membuat web app HTML/CSS/JS secara natural language.",
+    "publisher": "KoncoWeb",
+    "copyright": "© 2026 KoncoWeb",
+    "externalBin": []
+  }
+}

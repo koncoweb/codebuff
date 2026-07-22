@@ -21,6 +21,7 @@ Freebuff is the public, free coding agent built from the Codebuff agent framewor
 - `packages/llm-providers/` - public LLM provider shims
 - `freebuff/` - Freebuff CLI, release files, and e2e tests
 - `scripts/tmux/` - tmux helpers for CLI testing
+- `apps/desktop/` - **KoncoVibe** desktop app (Vite + React 19 + Tauri 2.0)
 
 ## Conventions
 
@@ -33,3 +34,7 @@ Freebuff is the public, free coding agent built from the Codebuff agent framewor
 
 - `docs/agents-and-tools.md`
 - `docs/testing.md`
+- `docs/HANDOFF.md` - KoncoVibe handoff document (current state, kendala, next steps)
+- `docs/ARCHITECTURE.md` - KoncoVibe architecture diagrams & data flow
+- `requirement.md` - KoncoVibe requirement specification
+- `apps/desktop/CHANGELOG.md` - KoncoVibe changelog

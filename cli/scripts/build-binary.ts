@@ -410,10 +410,15 @@ async function ensureOpenTuiNativeBundle(targetInfo: TargetInfo) {
         extractDirForTar,
       ]
       if (process.platform === 'win32') {
-        tarArgs.unshift('--force-local')
+        try {
+          runCommand('tar', ['--force-local', ...tarArgs])
+        } catch (err) {
+          // Fall back to running without --force-local (e.g., if using bsdtar on Windows)
+          runCommand('tar', tarArgs)
+        }
+      } else {
+        runCommand('tar', tarArgs)
       }
-
-      runCommand('tar', tarArgs)
       log(
         `Installed OpenTUI native bundle for ${targetInfo.platform}-${targetInfo.arch} in ${target.label}`,
       )

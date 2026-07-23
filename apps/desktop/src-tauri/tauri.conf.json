@@ -41,6 +41,6 @@
     "longDescription": "KoncoVibe — aplikasi desktop AI Vibe Coding untuk membuat web app HTML/CSS/JS secara natural language.",
     "publisher": "KoncoWeb",
     "copyright": "© 2026 KoncoWeb",
-    "externalBin": []
+    "externalBin": ["binaries/codebuff-bridge"]
   }
 }

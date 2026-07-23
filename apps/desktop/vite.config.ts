@@ -25,6 +25,12 @@ export default defineConfig({
     target: 'chrome105',
     minify: !process.env.TAURI_ENV_DEBUG ? 'esbuild' : false,
     sourcemap: !!process.env.TAURI_ENV_DEBUG,
+    rollupOptions: {
+      // @codebuff/sdk imports node:module and other Node builtins — only used
+      // in the sidecar process, not the browser bundle. Externalizing prevents
+      // the production build from breaking.
+      external: ['@codebuff/sdk', '@codebuff/common', '@codebuff/agent-runtime'],
+    },
   },
 
   resolve: {

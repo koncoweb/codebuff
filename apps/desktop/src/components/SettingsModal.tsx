@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react'
-import { X, Cpu, Key, Globe, Shield, Save, Check, Bot } from 'lucide-react'
+import { X, Cpu, Key, Globe, Shield, Save, Check, Bot, Server } from 'lucide-react'
 import { CURATED_LLM_MODELS } from '../services/sidecar-api'
+import { McpSettings } from './McpSettings'
 
 interface SettingsModalProps {
   isOpen: boolean
@@ -19,6 +20,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   providerConfig,
   setProviderConfig,
 }) => {
+  const [activeTab, setActiveTab] = useState<'provider' | 'mcp'>('provider')
   const [sumopodKey, setSumopodKey] = useState(providerConfig.apiKey || import.meta.env.VITE_SUMOPOD_API_KEY || '')
   const [sumopodBaseUrl, setSumopodBaseUrl] = useState(providerConfig.baseUrl || import.meta.env.VITE_SUMOPOD_BASE_URL || 'https://ai.sumopod.com/v1')
   const [selectedModel, setSelectedModel] = useState(providerConfig.selectedModel || import.meta.env.VITE_SUMOPOD_DEFAULT_MODEL || 'MiniMax-M2.7-highspeed')
@@ -76,7 +78,38 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           </button>
         </div>
 
+        {/* Tabs */}
+        <div className="flex border-b border-slate-800 bg-slate-900/80">
+          <button
+            onClick={() => setActiveTab('provider')}
+            className={`flex items-center space-x-2 px-5 py-3 text-xs font-medium transition-colors border-b-2 ${
+              activeTab === 'provider'
+                ? 'border-cyan-500 text-cyan-300'
+                : 'border-transparent text-slate-400 hover:text-white'
+            }`}
+          >
+            <Cpu className="w-4 h-4" />
+            <span>Provider &amp; Model</span>
+          </button>
+          <button
+            onClick={() => setActiveTab('mcp')}
+            className={`flex items-center space-x-2 px-5 py-3 text-xs font-medium transition-colors border-b-2 ${
+              activeTab === 'mcp'
+                ? 'border-cyan-500 text-cyan-300'
+                : 'border-transparent text-slate-400 hover:text-white'
+            }`}
+          >
+            <Server className="w-4 h-4" />
+            <span>MCP Servers</span>
+          </button>
+        </div>
+
         {/* Content */}
+        {activeTab === 'mcp' ? (
+          <div className="p-5 max-h-[75vh] overflow-y-auto">
+            <McpSettings />
+          </div>
+        ) : (
         <div className="p-5 space-y-5 max-h-[75vh] overflow-y-auto">
           {/* Provider Selection */}
           <div>
@@ -185,8 +218,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </div>
           </div>
         </div>
+        )}
 
         {/* Footer */}
+        {activeTab === 'provider' && (
         <div className="p-4 border-t border-slate-800 bg-slate-900/80 flex items-center justify-end space-x-3">
           <button onClick={onClose} className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-medium text-slate-300">
             Batal
@@ -199,6 +234,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             <span>{saved ? 'Tersimpan!' : 'Simpan Pengaturan'}</span>
           </button>
         </div>
+        )}
       </div>
     </div>
   )

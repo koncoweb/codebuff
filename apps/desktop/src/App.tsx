@@ -11,8 +11,12 @@ import { getSavedProjects, saveUserProjects, addDebugLog, clearDebugLogs } from 
 import type { VibeAgentStep, UserProject, ChatMessage } from './services/sidecar-api'
 import type { NeonUser } from './services/neon-auth'
 import { getSavedUserSession, saveUserSession, clearUserSession } from './services/neon-auth'
+import { useAguiStore } from './services/agui-event-store'
 
 export function App() {
+  // AG-UI event store — consumes streaming events from the sidecar
+  const { reasoning, state: aguiState, store: aguiStore } = useAguiStore()
+
   // Persistent Auth Session
   const [user, setUser] = useState<NeonUser | null>(() => {
     return (
@@ -76,6 +80,7 @@ export function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false)
   const [generationVersion, setGenerationVersion] = useState(0)
   const [inspectedElement, setInspectedElement] = useState<InspectedElement | null>(null)
+  const [clearHighlightKey, setClearHighlightKey] = useState(0)
   const abortControllerRef = useRef<AbortController | null>(null)
 
   // Sync projects list whenever user changes
@@ -173,9 +178,9 @@ export function App() {
   }
 
   // Send Vibe Coding Prompt for Active Project
-  const handleSendPrompt = async (prompt: string) => {
+  const runPrompt = async (prompt: string) => {
     setIsRunning(true)
-    addDebugLog('info', 'LLM_REQUEST', `[App] Memulai handleSendPrompt untuk project: ${activeProjectId}`)
+    addDebugLog('info', 'LLM_REQUEST', `[App] Memulai runPrompt untuk project: ${activeProjectId}`)
 
     // Bangun chat history dari steps sebelumnya (multi-turn context)
     const chatHistory: ChatMessage[] = []
@@ -219,6 +224,27 @@ export function App() {
     setIsRunning(false)
   }
 
+  // Prompt dari sidebar chat — bersihkan highlight iframe lalu jalankan
+  const handleSendPrompt = async (prompt: string) => {
+    setClearHighlightKey((k) => k + 1)
+    await runPrompt(prompt)
+  }
+
+  // Inline edit dari LivePreview: kirim instruksi + context elemen ke agent.
+  // Tidak memicu clear highlight agar border pulsing tetap tampil saat agent bekerja.
+  const handleInlineEdit = async (instruction: string, el: InspectedElement) => {
+    let ctx = `[Inline Edit — Element: ${el.selector}]`
+    if (el.text) ctx += ` — "${el.text.substring(0, 80)}"`
+    if (el.outerHtml) ctx += `\nElement HTML: ${el.outerHtml}`
+    if (el.computedStyles) {
+      const cs = el.computedStyles
+      ctx += `\nCurrent styles: display=${cs.display}, position=${cs.position}, width=${cs.width}, height=${cs.height}, color=${cs.color}, background=${cs.background}, font-size=${cs.fontSize}, margin=${cs.margin}, padding=${cs.padding}`
+    }
+    ctx += `\n\nUser instruction: ${instruction}`
+    setInspectedElement(null)
+    await runPrompt(ctx)
+  }
+
   const handleStop = () => {
     abortControllerRef.current?.abort()
     abortControllerRef.current = null
@@ -254,11 +280,22 @@ export function App() {
           onSwitchToCode={() => setActiveTab('code')}
           inspectedElement={inspectedElement}
           onClearInspected={() => setInspectedElement(null)}
+          reasoning={reasoning}
+          interrupts={aguiState.interrupts}
+          onResolveInterrupt={(id, payload) => aguiStore.resolveInterrupt(id, payload)}
+          onCancelInterrupt={(id) => aguiStore.cancelInterrupt(id)}
         />
 
         {/* Right Side: Live iFrame Web Preview or Code Viewer */}
         {activeTab === 'preview' ? (
-          <LivePreview activeTab={activeTab} setActiveTab={setActiveTab} generatedHtml={generatedHtml} onInspectElement={setInspectedElement} />
+          <LivePreview
+            activeTab={activeTab}
+            setActiveTab={setActiveTab}
+            generatedHtml={generatedHtml}
+            onInspectElement={setInspectedElement}
+            onInlineEdit={handleInlineEdit}
+            clearHighlightKey={clearHighlightKey}
+          />
         ) : (
           <CodeViewer generatedHtml={generatedHtml} projectName={activeProject?.name} generationVersion={generationVersion} />
         )}

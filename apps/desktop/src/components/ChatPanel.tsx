@@ -6,6 +6,9 @@ import {
 } from 'lucide-react'
 import type { VibeAgentStep, PipelinePhase } from '../services/sidecar-api'
 import type { InspectedElement } from './LivePreview'
+import { ReasoningPanel } from './ReasoningPanel'
+import { InterruptDialog } from './InterruptDialog'
+import type { AguiInterrupt } from '../types/agui-events'
 
 export interface ChatPanelProps {
   steps: VibeAgentStep[]
@@ -15,6 +18,16 @@ export interface ChatPanelProps {
   onSwitchToCode?: () => void
   inspectedElement?: InspectedElement | null
   onClearInspected?: () => void
+  reasoning?: Array<{
+    id: string
+    content: string
+    agentId?: string
+    isStreaming: boolean
+    timestamp: number
+  }>
+  interrupts?: AguiInterrupt[]
+  onResolveInterrupt?: (interruptId: string, payload: unknown) => void
+  onCancelInterrupt?: (interruptId: string) => void
 }
 
 const PIPELINE_PHASES: { phase: PipelinePhase; label: string; icon: React.ReactNode }[] = [
@@ -247,7 +260,7 @@ const FollowUps: React.FC<{ onPick: (p: string) => void }> = ({ onPick }) => (
 )
 
 // === MAIN ===
-export const ChatPanel: React.FC<ChatPanelProps> = ({ steps, isRunning, onSendPrompt, onStop, onSwitchToCode, inspectedElement, onClearInspected }) => {
+export const ChatPanel: React.FC<ChatPanelProps> = ({ steps, isRunning, onSendPrompt, onStop, onSwitchToCode, inspectedElement, onClearInspected, reasoning, interrupts, onResolveInterrupt, onCancelInterrupt }) => {
   const [input, setInput] = useState('')
   const [cat, setCat] = useState(0)
   const [autoScroll, setAutoScroll] = useState(true)
@@ -370,6 +383,18 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ steps, isRunning, onSendPr
         ) : (
           <>
             {rendered}
+            {/* Reasoning panel — shows agent's thinking process */}
+            {reasoning && reasoning.length > 0 && (
+              <ReasoningPanel reasoning={reasoning} />
+            )}
+            {/* Interrupt dialogs — human-in-the-loop approval */}
+            {interrupts && interrupts.length > 0 && onResolveInterrupt && onCancelInterrupt && (
+              <InterruptDialog
+                interrupts={interrupts}
+                onResolve={onResolveInterrupt}
+                onCancel={onCancelInterrupt}
+              />
+            )}
             {isRunning && steps.every((s) => s.status !== 'running') && (
               <div className="flex justify-start animate-slide-in">
                 <div className="flex items-center gap-1.5 pl-6">

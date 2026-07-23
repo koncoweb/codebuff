@@ -2,19 +2,25 @@
  * Codebuff Integration Service untuk KoncoVibe
  *
  * Hybrid Mode Implementation:
- * - Jika CODEBUFF_API_KEY tersedia: gunakan Codebuff SDK dengan multi-agent pipeline
- * - Jika tidak: fallback ke SumoPod AI (pipeline existing di sidecar-api.ts)
+ * - Desktop (Tauri): Codebuff SDK sidecar via JSON-RPC over stdio
+ * - Browser/ fallback: SumoPod AI (pipeline existing di sidecar-api.ts)
  *
- * Arsitektur Desktop (Tauri):
- * Saat KoncoVibe berjalan sebagai desktop app, service ini akan berkomunikasi
- * dengan Codebuff SDK sidecar process via JSON-RPC over stdio.
+ * The sidecar runs the Codebuff SDK in a Node.js/Bun process, communicating
+ * via AG-UI-inspired events streamed over JSON-RPC. The frontend never imports
+ * @codebuff/sdk directly (which would break the production build).
+ *
+ * REFACTOR: Event→step mapping logic diekstrak ke `agui-step-mapper.ts`
+ * sebagai class terpisah dengan TOOL_MAPPINGS table tunggal. File ini
+ * sekarang hanya berisi orchestration logic (mode detection, dispatch,
+ * event subscription, fallback).
  *
  * Lihat: docs/architecture.md untuk diagram alur lengkap.
  */
-import { vibeCoderAgent } from '../agents/vibe-coder'
-import { vibeReviewerAgent } from '../agents/vibe-reviewer'
-import { sendVibePrompt, addDebugLog } from './sidecar-api'
-import type { VibeAgentStep, PipelinePhase, ChatMessage } from './sidecar-api'
+import { sendVibePrompt, addDebugLog, extractCleanHtml } from './sidecar-api'
+import type { VibeAgentStep, ChatMessage } from './sidecar-api'
+import { sidecarTransport } from './codebuff-sidecar-transport'
+import { AguiStepMapper } from './agui-step-mapper'
+import type { AguiEvent, RunResult } from '../types/agui-events'
 
 export type BackendMode = 'codebuff' | 'sumopod-fallback'
 
@@ -36,29 +42,49 @@ export interface VibePromptOptions {
   currentHtml?: string
   signal?: AbortSignal
   chatHistory?: ChatMessage[]
+  elementContext?: {
+    selector: string
+    tag: string
+    id?: string
+    classes: string[]
+    text?: string
+    outerHTML?: string
+  }
 }
+
+// Track the active thread for multi-turn continuity
+let activeThreadId: string | null = null
+let previousRunState: unknown = null
 
 /**
  * Deteksi mode backend yang aktif.
- * Saat desktop mode (Tauri), check apakah Codebuff sidecar binary tersedia.
- * Selalu fallback ke SumoPod jika sidecar belum siap.
+ * Saat desktop mode (Tauri), coba start sidecar dan ping.
+ * Fallback ke SumoPod jika sidecar tidak tersedia.
  */
 export async function getBackendMode(): Promise<BackendMode> {
-  if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
-    try {
-      const { invoke } = await import('@tauri-apps/api/core')
-      const sidecarReady = await invoke<boolean>('check_codebuff_sidecar')
-      if (sidecarReady) return 'codebuff'
-    } catch {
-      // Tauri API tidak tersedia atau command gagal — fallback
-    }
+  if (!sidecarTransport.isDesktopMode()) {
+    return 'sumopod-fallback'
   }
+
+  try {
+    const started = await sidecarTransport.start()
+    if (!started) return 'sumopod-fallback'
+
+    const result = await sidecarTransport.ping().catch(() => null)
+    if (result?.pong) {
+      addDebugLog('info', 'LLM_REQUEST', 'Codebuff sidecar active', { pid: result })
+      return 'codebuff'
+    }
+  } catch (err: any) {
+    addDebugLog('warn', 'LLM_REQUEST', `Sidecar unavailable: ${err?.message}`, {})
+  }
+
   return 'sumopod-fallback'
 }
 
 /**
  * Kirim prompt vibe coding ke backend.
- * Automatically memilih Codebuff SDK atau SumoPod fallback.
+ * Automatically memilih Codebuff sidecar atau SumoPod fallback.
  */
 export async function sendVibeCodingPrompt(options: VibePromptOptions): Promise<void> {
   const mode = await getBackendMode()
@@ -79,7 +105,7 @@ export async function sendVibeCodingPrompt(options: VibePromptOptions): Promise<
   })
 
   if (mode === 'codebuff') {
-    await sendViaCodebuffSDK(options)
+    await sendViaSidecar(options)
   } else {
     await sendVibePrompt(
       options.prompt,
@@ -88,67 +114,74 @@ export async function sendVibeCodingPrompt(options: VibePromptOptions): Promise<
       options.onGeneratedHtml,
       options.currentHtml,
       options.signal,
-      options.chatHistory
+      options.chatHistory,
     )
   }
 }
 
 /**
- * Jalankan via Codebuff SDK (desktop/Tauri mode).
+ * Jalankan via Codebuff SDK sidecar (desktop/Tauri mode).
  *
- * Agent pipeline:
- * 1. vibe-coder: think → research → generate → review
- * 2. Events dikirim ke UI via onStep callback
- *
- * TODO: Implement saat Tauri sidecar siap.
- * Sementara ini throw error informatif.
+ * Streams AG-UI-inspired events from the sidecar and converts them to
+ * VibeAgentStep for backward compatibility with the existing UI.
  */
-async function sendViaCodebuffSDK(options: VibePromptOptions): Promise<void> {
-  // Dynamic import — hanya load SDK di desktop mode
+async function sendViaSidecar(options: VibePromptOptions): Promise<void> {
+  if (!activeThreadId) {
+    activeThreadId = `thread-${Date.now()}`
+  }
+
+  // One mapper instance per run — isolates stepId/toolName tracking
+  const mapper = new AguiStepMapper()
+  let latestAssistantContent = ''
+
+  const unsubscribe = sidecarTransport.onEvent((event: AguiEvent) => {
+    const steps = mapper.convert(event)
+    for (const step of steps) {
+      if (step.type === 'assistant_message' && step.content) {
+        latestAssistantContent = step.content
+      }
+      options.onStep(step)
+    }
+  })
+
+  // Handle abort
+  if (options.signal) {
+    options.signal.addEventListener('abort', () => {
+      if (activeThreadId) {
+        sidecarTransport.cancelRun(activeThreadId)
+      }
+    })
+  }
+
   try {
-    const { CodebuffClient } = await import('@codebuff/sdk')
-
-    const client = new CodebuffClient({
-      apiKey: options.providerConfig.apiKey || process.env.CODEBUFF_API_KEY,
-      cwd: typeof process !== 'undefined' ? process.cwd() : '/',
-      agentDefinitions: [vibeCoderAgent, vibeReviewerAgent],
-      handleEvent: (event: any) => {
-        // Map Codebuff event ke VibeAgentStep UI
-        const step = mapCodebuffEventToStep(event)
-        if (step) {
-          options.onStep(step)
-        }
-      },
+    const result: RunResult = await sidecarTransport.runPrompt({
+      prompt: options.prompt,
+      threadId: activeThreadId,
+      previousRunState,
+      apiKey: options.providerConfig.apiKey,
+      elementContext: options.elementContext,
     })
 
-    addDebugLog('info', 'LLM_REQUEST', 'Codebuff SDK client initialized', {
-      agent: vibeCoderAgent.id,
-      model: vibeCoderAgent.model,
-    })
+    // Store run state for multi-turn continuity
+    if (result.runState) {
+      previousRunState = result.runState
+    }
 
-    const result = await client.run({
-      agent: vibeCoderAgent,
-      prompt: options.currentHtml
-        ? `EDIT existing HTML:\n\`\`\`html\n${options.currentHtml}\n\`\`\`\n\nREQUEST: ${options.prompt}`
-        : options.prompt,
-    })
-
-    // Extract generated HTML dari output agent
-    const output = result.output?.last_message || ''
+    // Extract generated HTML from the output
+    const output = result.output || latestAssistantContent
     if (output && options.onGeneratedHtml) {
-      // Parse HTML dari output (sama seperti extractCleanHtml di sidecar-api)
-      const { extractCleanHtml } = await import('./sidecar-api')
       const cleaned = extractCleanHtml(output)
       if (cleaned) {
         options.onGeneratedHtml(cleaned)
       }
     }
 
-    addDebugLog('success', 'LLM_RESPONSE', 'Codebuff SDK run completed', {
-      traceSessionId: result.traceSessionId,
+    addDebugLog('success', 'LLM_RESPONSE', 'Codebuff sidecar run completed', {
+      status: result.status,
+      cost: result.totalCost,
     })
   } catch (err: any) {
-    addDebugLog('error', 'LLM_RESPONSE', `Codebuff SDK error, falling back to default pipeline: ${err?.message}`, { error: err })
+    addDebugLog('error', 'LLM_RESPONSE', `Sidecar error, falling back: ${err?.message}`, { error: err })
 
     // Graceful fallback ke SumoPod
     await sendVibePrompt(
@@ -158,166 +191,15 @@ async function sendViaCodebuffSDK(options: VibePromptOptions): Promise<void> {
       options.onGeneratedHtml,
       options.currentHtml,
       options.signal,
-      options.chatHistory
+      options.chatHistory,
     )
+  } finally {
+    unsubscribe()
   }
 }
 
-/**
- * Map Codebuff SDK event ke VibeAgentStep untuk UI KoncoVibe.
- */
-function mapCodebuffEventToStep(event: any): VibeAgentStep | null {
-  if (!event || !event.type) return null
-
-  const timestamp = new Date().toLocaleTimeString()
-  const stepId = crypto.randomUUID()
-
-  switch (event.type) {
-    case 'assistant_message':
-      return {
-        id: stepId,
-        type: 'assistant_message',
-        title: 'KoncoVibe AI (Codebuff)',
-        content: event.content || event.message || '',
-        timestamp,
-        status: 'completed',
-        agentGroup: 'reviewer',
-        pipelinePhase: 'done',
-      }
-
-    case 'tool_call':
-      return {
-        id: stepId,
-        type: mapToolNameToStepType(event.toolName),
-        title: formatToolTitle(event.toolName),
-        content: event.input ? JSON.stringify(event.input, null, 2).substring(0, 500) : '',
-        timestamp,
-        status: 'running',
-        agentGroup: mapToolNameToAgentGroup(event.toolName),
-        pipelinePhase: mapToolNameToPipelinePhase(event.toolName),
-        affectedFile: event.input?.path,
-      }
-
-    case 'tool_result':
-      return {
-        id: stepId,
-        type: 'change_file',
-        title: `${event.toolName} selesai`,
-        content: event.output ? String(event.output).substring(0, 500) : 'Completed',
-        timestamp,
-        status: 'completed',
-        agentGroup: mapToolNameToAgentGroup(event.toolName),
-        pipelinePhase: mapToolNameToPipelinePhase(event.toolName),
-      }
-
-    case 'error':
-      return {
-        id: stepId,
-        type: 'error',
-        title: 'Error dari Agent',
-        content: event.message || event.error || 'Unknown error',
-        timestamp,
-        status: 'failed',
-        agentGroup: 'editor',
-        pipelinePhase: 'done',
-      }
-
-    case 'subagent_start':
-      return {
-        id: stepId,
-        type: 'thinking',
-        title: `Men-spawn agent: ${event.agentType}`,
-        content: event.prompt ? event.prompt.substring(0, 200) : '',
-        timestamp,
-        status: 'running',
-        agentGroup: event.agentType || 'default',
-        pipelinePhase: event.agentType === 'researcher-web' ? 'researching' : 'thinking',
-      }
-
-    default:
-      return null
-  }
-}
-
-/** Map tool name ke agentGroup untuk UI grouping */
-function mapToolNameToAgentGroup(toolName: string): string {
-  switch (toolName) {
-    case 'think_deeply':
-      return 'thinker'
-    case 'web_search':
-    case 'read_url':
-    case 'read_docs':
-      return 'researcher-web'
-    case 'write_file':
-    case 'str_replace':
-    case 'apply_patch':
-      return 'editor'
-    case 'spawn_agents':
-      return 'thinker'
-    default:
-      return 'default'
-  }
-}
-
-/** Map tool name ke pipelinePhase untuk progress indicator */
-function mapToolNameToPipelinePhase(toolName: string): PipelinePhase {
-  switch (toolName) {
-    case 'think_deeply':
-      return 'thinking'
-    case 'web_search':
-    case 'read_url':
-    case 'read_docs':
-      return 'researching'
-    case 'write_file':
-    case 'str_replace':
-    case 'apply_patch':
-      return 'generating'
-    case 'code_search':
-    case 'glob':
-    case 'read_files':
-      return 'reviewing'
-    default:
-      return 'generating'
-  }
-}
-
-function mapToolNameToStepType(toolName: string): VibeAgentStep['type'] {
-  switch (toolName) {
-    case 'write_file':
-    case 'str_replace':
-    case 'apply_patch':
-      return 'change_file'
-    case 'read_files':
-    case 'read_subtree':
-    case 'find_files':
-      return 'read_files'
-    case 'run_terminal_command':
-      return 'run_terminal_command'
-    case 'web_search':
-    case 'read_url':
-    case 'read_docs':
-      return 'thinking'
-    case 'think_deeply':
-      return 'thinking'
-    case 'spawn_agents':
-      return 'thinking'
-    default:
-      return 'assistant_message'
-  }
-}
-
-function formatToolTitle(toolName: string): string {
-  const titles: Record<string, string> = {
-    write_file: 'Menulis file...',
-    str_replace: 'Mengedit kode...',
-    read_files: 'Membaca file...',
-    run_terminal_command: 'Menjalankan terminal...',
-    web_search: 'Mencari di web...',
-    read_url: 'Membaca URL...',
-    think_deeply: 'Berpikir mendalam...',
-    spawn_agents: 'Men-spawn sub-agent...',
-    set_output: 'Menyiapkan output...',
-    code_search: 'Mencari kode...',
-  }
-  return titles[toolName] || `Tool: ${toolName}`
+/** Reset conversation state (new chat). */
+export function resetConversation(): void {
+  activeThreadId = null
+  previousRunState = null
 }

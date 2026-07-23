@@ -16,13 +16,34 @@ fn get_app_info() -> serde_json::Value {
     })
 }
 
-/// Command: Cek apakah Codebuff sidecar tersedia di sistem
-/// TODO: Implement deteksi sidecar binary saat packaging siap.
-/// Saat packaging, sidecar binary akan di-bundle via externalBin di tauri.conf.json.
+/// Command: Cek apakah Codebuff sidecar tersedia di sistem.
+///
+/// Mencoba deteksi apakah `bun` (untuk dev mode) atau sidecar binary
+/// (untuk production) tersedia. Frontend menggunakan info ini untuk
+/// memilih antara Codebuff mode dan SumoPod fallback.
 #[tauri::command]
-async fn check_codebuff_sidecar() -> bool {
-    // Saat ini return false — app akan fallback ke SumoPod mode
-    // Saat sidecar siap, check file existence di path yang di-bundle
+async fn check_codebuff_sidecar(app: tauri::AppHandle) -> bool {
+    // Cek apakah sidecar binary sudah di-bundle (production)
+    let sidecar_path = app
+        .path()
+        .resolve("binaries/codebuff-bridge", tauri::path::BaseDirectory::Resource);
+
+    if let Ok(path) = sidecar_path {
+        if path.exists() {
+            return true;
+        }
+    }
+
+    // Dev mode: cek apakah `bun` tersedia di PATH
+    if which::which("bun").is_ok() {
+        return true;
+    }
+
+    // Fallback: cek node
+    if which::which("node").is_ok() {
+        return true;
+    }
+
     false
 }
 

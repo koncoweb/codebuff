@@ -1,7 +1,7 @@
 # KoncoVibe — Requirement Specification
 
 > **Status:** Living document — diperbarui setiap ada perubahan fitur, UX, UI, atau arsitektur.
-> **Terakhir diperbarui:** 2026-07-22
+> **Terakhir diperbarui:** 2026-07-23
 
 ---
 
@@ -23,31 +23,59 @@
 ## 2. Arsitektur Sistem
 
 ```
-┌─────────────────────────────────────────────────────┐
-│                  Tauri 2.0 Window                    │
-│  ┌───────────────────────────────────────────────┐  │
-│  │           React 19 + Vite 6 (WebView2)        │  │
-│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐   │  │
-│  │  │ChatPanel │  │LivePreview│  │CodeViewer│   │  │
-│  │  │(prompt)  │  │(iframe)   │  │(files)   │   │  │
-│  │  └────┬─────┘  └─────▲────┘  └────▲─────┘   │  │
-│  │       │              │            │          │  │
-│  │  ┌────▼──────────────┴────────────┴─────┐   │  │
-│  │  │     codebuff-integration.ts           │   │  │
-│  │  │  ┌─────────┐    ┌──────────────────┐ │   │  │
-│  │  │  │Codebuff │    │ SumoPod Fallback │ │   │  │
-│  │  │  │  SDK    │───▶│  (sidecar-api)   │ │   │  │
-│  │  │  └────┬────┘    └──────────────────┘ │   │  │
-│  │  └───────┼──────────────────────────────┘   │  │
-│  └──────────┼──────────────────────────────────┘  │
-│             │                                      │
-│  ┌──────────▼──────────────────────────────────┐  │
-│  │         Rust Backend (src-tauri/)           │  │
-│  │  Commands: get_app_info, save_html_to_disk  │  │
-│  │  Future: Codebuff sidecar (JSON-RPC stdio)  │  │
-│  └─────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────┐
+│                    Tauri 2.0 Window                        │
+│  ┌──────────────────────────────────────────────────────┐ │
+│  │             React 19 + Vite 6 (WebView2)              │ │
+│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐           │ │
+│  │  │ChatPanel │  │LivePreview│  │CodeViewer│           │ │
+│  │  │+Reasoning│  │+EditMode │  │          │           │ │
+│  │  │+Interrupt│  │          │  │          │           │ │
+│  │  └────┬─────┘  └─────▲────┘  └────▲─────┘           │ │
+│  │       │              │            │                  │ │
+│  │  ┌────▼──────────────┴────────────┴─────────────┐    │ │
+│  │  │     codebuff-integration.ts                   │    │ │
+│  │  │  ┌──────────────────────┐  ┌───────────────┐ │    │ │
+│  │  │  │ Sidecar Transport    │  │ SumoPod       │ │    │ │
+│  │  │  │ (JSON-RPC over stdio)│  │ Fallback      │ │    │ │
+│  │  │  │ AG-UI Event Stream   │  │ (sidecar-api) │ │    │ │
+│  │  │  └──────────┬───────────┘  └───────────────┘ │    │ │
+│  │  └─────────────┼────────────────────────────────┘    │ │
+│  └────────────────┼──────────────────────────────────────┘ │
+│                   │                                        │
+│  ┌────────────────▼──────────────────────────────────────┐ │
+│  │  ┌─────────────────────────────────┐                   │ │
+│  │  │   Codebuff SDK Sidecar          │ (separate process)│ │
+│  │  │   (Node.js/Bun via shell plugin)│                   │ │
+│  │  │   • CodebuffClient + Agents     │                   │ │
+│  │  │   • MCP Client (5 servers)      │                   │ │
+│  │  │   • AG-UI Event Mapper          │                   │ │
+│  │  │   • Interrupt Bridge            │                   │ │
+│  │  └─────────────────────────────────┘                   │ │
+│  │         Rust Backend (src-tauri/)                      │ │
+│  │  Commands: get_app_info, check_codebuff_sidecar, ...   │ │
+│  └────────────────────────────────────────────────────────┘ │
+└──────────────────────────────────────────────────────────┘
 ```
+
+### 2.1 AG-UI-Inspired Event Layer
+
+KoncoVibe mengadopsi pola event AG-UI (https://docs.ag-ui.com) untuk mengisi gap Codebuff:
+
+| Event Type | Fills Codebuff Gap |
+|---|---|
+| `TEXT_MESSAGE_START/CONTENT/END` | True delta streaming (Codebuff's `text` event adalah full-string) |
+| `TOOL_CALL_START/ARGS/END` | Streaming tool args (Codebuff sends complete input) |
+| `STATE_SNAPSHOT/DELTA` | Incremental state sync (Codebuff only has snapshot blobs) |
+| `RUN_FINISHED { outcome: interrupt }` | Generic tool approval with responseSchema + approve-with-edits |
+| `REASONING_START/CONTENT/END` | Lifecycle wrapper untuk Codebuff's reasoning_delta |
+| `STEP_STARTED/FINISHED` | Subagent lifecycle clarity |
+
+**Yang TIDAK diambil dari AG-UI** (sudah kuat di Codebuff):
+- MCP client (Codebuff punya stdio/HTTP/SSE + env-var substitution)
+- Subagent orchestration (Codebuff punya parallel spawn + cost aggregation)
+- Context-pruner agent (Codebuff punya dedicated agent)
+- 33 native tools
 
 ---
 
@@ -79,7 +107,13 @@
 - Toggle antara "Live Render AI" (blob) dan "Server Port 3000" (localhost)
 - Responsive mode: Desktop / Tablet / Mobile
 - Refresh button untuk reload preview
-- **Click-to-Inspect**: inspector mode menginjeksi script ke iframe — hover menampilkan highlight ungu, click mengirim element info (tag, id, classes, text, CSS selector) ke ChatPanel sebagai context chip
+- **Click-to-Inspect (mode Inspector)**: menginjeksi script ke iframe — hover menampilkan highlight ungu; click elemen menangkap **rich element context** dan mengirimnya via `postMessage` type `koncovibe-inspect` ke ChatPanel sebagai context chip:
+  - Tag, id, semua classes, text content (dipotong 200 char)
+  - **CSS selector path** hierarkis (mis. `body > div.container > header > h1`)
+  - `outerHTML` (dipotong 500 char) & **bounding client rect**
+  - **Computed styles**: display, position, width, height, color, background, font-size, margin, padding
+- **Visual highlight overlay** (persisten, cyan `box-shadow: 0 0 0 2px #06b6d4`) pada elemen yang diklik + floating label berisi selector path; otomatis bersih saat elemen lain diklik atau saat user mengirim prompt (sinyal `clearHighlightKey` dari App)
+- **Inline Edit Mode (toggle "Edit Mode")**: mode terpisah di toolbar — kursor crosshair, klik elemen membuka **floating input overlay** dekat elemen. User mengetik instruksi natural language (mis. "buat jadi merah", "tambah padding"); pada Enter / tombol "Kirim" dikirim via `postMessage` type `koncovibe-inline-edit` berisi instruksi + rich element context ke agent. Elemen mendapat **border pulsing** (animasi `koncovibe-pulse`) sebagai feedback saat agent memproses; pulse terhapus otomatis saat iframe di-reload dengan HTML baru
 - Mock browser address bar dengan indikator HTTP 200
 
 ### 3.3 Code Viewer (Kanan Bawah)
@@ -107,14 +141,63 @@
 - Default API key, base URL, dan model dari Vite env variable (`VITE_SUMOPOD_*`)
 - **Provider switching**: baseUrl auto-update saat ganti provider (SumoPod/OpenAI/OpenRouter)
 - **Settings persistence**: providerConfig disimpan ke localStorage (`koncovibe_provider_config`)
+- **Tab navigation di SettingsModal**: modal punya dua tab — "Provider & Model" (config provider/API key/model) dan "MCP Servers" (render `McpSettings`). Tab aktif default: Provider & Model. Footer "Simpan Pengaturan" hanya tampil di tab Provider (tab MCP punya tombol save sendiri)
 
-### 3.6 Authentication (Neon Auth)
+### 3.6 MCP Servers Configuration
+- **Section component** (`McpSettings.tsx`) untuk mengelola Model Context Protocol (MCP) servers — **terintegrasi sebagai tab "MCP Servers"** di dalam SettingsModal (icon `Server` dari lucide-react)
+- **5 built-in servers**: Filesystem, GitHub, Playwright, Supabase, Neon — masing-masing dengan command & args default
+- **Toggle on/off** per server via checkbox (state persisted ke localStorage `koncovibe_mcp_servers`)
+- **Status indicator** per server: Connected (emerald), Disconnected (slate), Error (rose), Testing (cyan spinner)
+- **API token inputs** (password-masked) untuk server yang butuh kredensial:
+  - `GITHUB_TOKEN` (GitHub)
+  - `SUPABASE_TOKEN` (Supabase)
+  - `NEON_API_KEY` (Neon)
+  - Disimpan di localStorage key `koncovibe_mcp_tokens` (diakses via `loadMcpTokens()` / `saveMcpTokens()`)
+- **Test Connection** button per server — memanggil sidecar transport's `ping()` (`codebuff-sidecar-transport.ts`) untuk verifikasi health
+- **Custom MCP servers**: tambah (name, command, args, env vars) / hapus — di-style dengan accent ungu untuk membedakan dari built-in
+- Self-contained: tidak menerima props, kelola state sendiri via `useState`/`useEffect`
+- Export: `McpSettings` (default + named), `loadMcpTokens()`, `saveMcpTokens()`, interface `McpTokenConfig`, interface `McpCustomServer`
+
+### 3.7 Authentication (Neon Auth)
 - Sign in / Sign up dengan email-password
 - Session persistent di `localStorage`
 - Membership tier: regular, pro, special, vip
 - Fallback offline mode (demo session tier `regular`) hanya saat network error (offline/CORS/server unreachable)
 - Auth failure (401/403) menampilkan pesan error spesifik ke user — tidak auto-login
 - Config URL backend via env variable (`VITE_NEON_AUTH_BASE_URL`, `VITE_NEON_AUTH_PROJECT_ID`)
+
+### 3.8 Generative UI Component Registry
+- **Komponen registry** (`generative-ui/Registry.tsx`) yang memperluas widget tunggal `button` Codebuff menjadi set lengkap komponen UI yang dapat di-render oleh agent
+- Agent mengemit tool call `render_ui` dengan tipe `widget`, frontend me-render via registry
+- **6 widget types** yang didukung:
+  - `button` — tombol rounded, primary=cyan gradient, secondary=slate, buka link jika disediakan
+  - `code_preview` — block code monospace (font-mono, bg-slate-950), language label di pojok kanan atas, max-height 300px
+  - `diff_view` — diff dua kolom (old kiri=merah, new kanan=hijau), perbandingan line-level via set, filename header
+  - `image_grid` — grid responsif (1/2/3 kolom berdasarkan jumlah gambar), rounded images
+  - `status_card` — glass card dengan icon, title, message; success=emerald, warning=amber, error=red, info=cyan
+  - `action_chips` — baris pill buttons (rounded-full, bg-cyan-500/10, hover:bg-cyan-500/20)
+- **Registry API**:
+  - `registerWidget(type, component)` — daftarkan widget custom baru
+  - `renderWidget(widget, onInteract)` — render widget berdasarkan type, return `React.ReactElement | null`
+  - `GenerativeUIView` — main component wrapper
+- **Callback interaksi**: `onInteract?(data)` untuk widget interaktif (button click, chip click)
+- **Design system konsisten**: dark glass cards, cyan/purple accents, font Inter/Outfit/Fira Code, lucide-react icons (CheckCircle, AlertCircle, AlertTriangle, Info, ExternalLink)
+- **CSS utility classes baru** di `index.css`: `inline-flex`, `flex-wrap`, `grid-cols-2`, `gap-3`, hover states (`hover:bg-cyan-500/20`, `hover:bg-slate-700`, `hover:opacity-90`)
+
+### 3.9 DiffView — Before/After Code Change Review
+- **Komponen standalone** (`DiffView.tsx`) menampilkan perubahan kode before/after saat agent mengedit file, dengan aksi Approve / Reject / Edit & Apply
+- Props-driven: `oldContent`, `newContent`, `filename?`, `onApply?`, `onReject?`, `onEditAndApply?(editedContent)`
+- **Default Unified Diff View**: baris `+` (hijau `bg-emerald-500/10`) untuk penambahan, `-` (merah `bg-red-500/10`) untuk penghapusan, unchanged `text-slate-400`; line number di gutter kiri (`text-slate-600`, `select-none`, right-aligned)
+- **Toggle Split View**: tombol "Unified" / "Split" di header — Split menampilkan konten lama (kiri) & baru (kanan) side-by-side dalam dua kolom
+- **Filename header**: icon `FileCode` (lucide-react) + nama file + stats `+X -Y` (additions `text-emerald-400` / deletions `text-red-400`)
+- **Action buttons**:
+  - **Apply** (`bg-cyan-500/20 … border-cyan-500/40`) → `onApply()`
+  - **Reject** (`bg-red-500/10 … border-red-500/30`) → `onReject()`
+  - **Edit & Apply** (`bg-purple-500/10 … border-purple-500/30`) → masuk edit mode
+- **Edit mode**: `<textarea>` monospace (`bg-slate-950`, `min-h-[200px]`) pre-filled `newContent`, dengan tombol **Save** (→ `onEditAndApply(editedContent)`) dan **Cancel**
+- **Diff computation**: perbandingan line-by-line sederhana — split old/new by `\n`, klasifikasi via `Set` (added = di new tapi tidak di old; removed = sebaliknya); hasil di-memoize via `useMemo`
+- State via `useState`: view mode (`unified` | `split`), edit mode (boolean), edited content (string)
+- **CSS utility classes baru** di `index.css`: opacity backgrounds (`bg-slate-900/60`, `bg-emerald-500/10`, `bg-red-500/10`, `bg-purple-500/10`), `text-red-400`, `text-slate-600`, borders (`border-white/10`, `border-cyan-500/40`, `border-red-500/30`, `border-purple-500/30`), hover states, sizing (`w-4`, `w-10`, `pr-2`, `gap-1.5`, `max-h-[400px]`, `min-h-[200px]`), `text-right`, `select-none`, `select-text`, `whitespace-pre`
 
 ---
 
@@ -278,17 +361,32 @@ apps/desktop/
 │   ├── components/
 │   │   ├── ChatPanel.tsx           # Sidebar kiri: prompt input + steps timeline
 │   │   ├── CodeViewer.tsx          # Virtual file tree + debug log
+│   │   ├── DiffView.tsx            # Before/after code change review (unified/split, edit & apply)
 │   │   ├── Header.tsx              # Top bar: project, model, user
 │   │   ├── LivePreview.tsx         # iFrame preview (Blob URL)
+│   │   ├── McpSettings.tsx         # MCP servers config section (toggle, tokens, custom servers)
 │   │   ├── NeonAuthModal.tsx       # Login/signup modal
-│   │   └── SettingsModal.tsx       # Provider & model config
+│   │   ├── SettingsModal.tsx       # Settings: tabbed (Provider & Model + MCP Servers)
+│   │   └── generative-ui/
+│   │       └── Registry.tsx        # Generative UI component registry (6 widget types)
 │   ├── services/
-│   │   ├── codebuff-integration.ts # Hybrid: Codebuff SDK + SumoPod fallback
-│   │   ├── neon-auth.ts            # Neon Auth + localStorage session
-│   │   └── sidecar-api.ts          # SumoPod LLM pipeline + HTML parser
+│   │   ├── agui-event-store.ts      # Frontend AG-UI event accumulator + useAguiStore() hook
+│   │   ├── agui-step-mapper.ts      # AG-UI → VibeAgentStep converter + TOOL_MAPPINGS table (single source)
+│   │   ├── codebuff-integration.ts  # Thin orchestrator: mode detection + dispatch (sidecar vs SumoPod)
+│   │   ├── codebuff-sidecar-transport.ts # Sidecar lifecycle (Tauri shell plugin, JSON-RPC client)
+│   │   ├── neon-auth.ts             # Neon Auth + localStorage session
+│   │   └── sidecar-api.ts           # SumoPod LLM pipeline + HTML parser
+│   ├── types/
+│   │   └── agui-events.ts           # AG-UI event type definitions (shared sidecar ↔ frontend)
 │   ├── App.tsx                     # Root state + layout
 │   ├── index.css                   # Design tokens + utility classes
 │   └── main.tsx                    # React 19 entry
+├── src-sidecar/                    # Codebuff SDK sidecar (separate Node.js/Bun process)
+│   ├── index.ts                    # Thin entry point: run/resume/cancel/ping handlers
+│   ├── json-rpc.ts                 # JSON-RPC 2.0 protocol layer (pure, no business logic)
+│   ├── stream-chunk-handler.ts     # Token streaming: Codebuff chunks → AG-UI TEXT/REASONING events
+│   ├── interrupt-bridge.ts         # Human-in-the-loop: waitForInterrupt, resolveInterrupt, setupInterruptBridge
+│   └── agui-event-mapper.ts       # Codebuff PrintModeEvent → AG-UI events, delta streaming, JSON-patch
 ├── src-tauri/                      # Rust backend (Tauri 2.0)
 │   ├── capabilities/default.json   # Permissions
 │   ├── src/

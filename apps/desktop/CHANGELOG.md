@@ -6,6 +6,30 @@ Semua perubahan penting pada aplikasi Vibe Coding Desktop (`apps/desktop`) didok
 
 ## [Unreleased] — 2026-07-23
 
+### 🐛 Bug Fix: Infinite Loading Indicator di "Thinking" Step
+
+**Status:** ✅ Selesai
+
+Loading indicator (spinner/typing dots) tidak hilang setelah AI selesai merespons. Dua root cause ditemukan dan diperbaiki.
+
+#### Root Cause 1: Step "Thinking" tidak pernah diupdate ke `completed`
+Di `sidecar-api.ts`, Step 1 (thinking) emit dengan `status: 'running'` tapi **ID tidak disimpan** dan **tidak pernah diupdate ke `completed'`**. Step ini tetap `running` selamanya → spinner di AgentCard "thinker" group tidak pernah hilang, dan `currentPhase` di ChatPanel selalu mengembalikan `'thinking'`.
+
+**Fix:** Simpan `step1Id`, lalu emit update dengan ID yang sama dan `status: 'completed'` setelah Step 2 (path sandbox check).
+
+**File:** `src/services/sidecar-api.ts`
+
+#### Root Cause 2: `runPrompt` di App.tsx tidak punya error handling
+`setIsRunning(false)` berada setelah `await sendVibeCodingPrompt()` tanpa try-finally. Jika function throw (API error, network error, dll), `isRunning` tetap `true` selamanya → loading indicator persist.
+
+**Fix:** Bungkus dengan `try { ... } catch { emit error step } finally { setIsRunning(false) }`:
+- `isRunning` selalu di-reset walau ada error
+- Error ditampilkan sebagai step `type: 'error'` di UI (bukan silent fail)
+
+**File:** `src/App.tsx`
+
+---
+
 ### ♻️ Refactor: Modularisasi File Error-Prone
 
 **Status:** ✅ Selesai — `tsc --noEmit` exit 0, `vite build` exit 0 (1609 modules, 3.65s)

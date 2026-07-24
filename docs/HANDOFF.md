@@ -163,6 +163,10 @@ True delta streaming dan lifecycle events yang mengisi gap Codebuff.
 | `prompt` possibly undefined | Default `const userPrompt = prompt ?? ''` |
 | `think_deeply` input field `topic` (salah) | Diperbaiki ke `thought` sesuai `ThinkDeeplyParams` |
 
+### 3.10 ✅ Bug Fix: Infinite Loading Indicator
+- **Step "Thinking" tidak completed** — `sidecar-api.ts` Step 1 emit `status: 'running'` tanpa simpan ID, tidak pernah diupdate. Fix: simpan `step1Id`, emit update ke `completed` setelah Step 2
+- **`runPrompt` tidak ada try-finally** — `App.tsx` jika `sendVibeCodingPrompt()` throw, `setIsRunning(false)` tidak pernah dipanggil. Fix: `try/catch/finally` dengan error step emit di catch
+
 ---
 
 ## 4. Next Steps Prioritas
@@ -302,3 +306,5 @@ bun install                      # Install semua workspace deps
 14. **Sidecar binary** — perlu `bun run build:sidecar` untuk compile binary nyata. Tanpa itu, `lib.rs` fallback ke `bun`/`node` runtime.
 15. **Tool name → UI mapping** — tambah tool Codebuff baru cukup tambah entry di `TOOL_MAPPINGS` table di `agui-step-mapper.ts`. JANGAN buat fungsi switch terpisah (itu sumber bug sebelumnya).
 16. **Sidecar modular structure** — `src-sidecar/` dipecah menjadi: `index.ts` (entry), `json-rpc.ts` (protocol), `stream-chunk-handler.ts` (streaming), `interrupt-bridge.ts` (HITL), `agui-event-mapper.ts` (event mapping). Edit di modul yang relevan, buan di `index.ts`.
+17. **Step lifecycle WAJIB** — setiap step dengan `status: 'running'` HARUS diupdate ke `'completed'` atau `'failed'` di akhir. Simpan step ID di variabel, jangan pakai `crypto.randomUUID()` inline saat emit update (ID beda = step baru, bukan update). Bug infinite loading sebelumnya karena ini.
+18. **`isRunning` di try-finally** — `runPrompt` di App.tsx HARUS dibungkus `try/catch/finally` agar `setIsRunning(false)` selalu dipanggil walau ada error. Jangan letakkan setelah `await` tanpa finally.

@@ -365,8 +365,9 @@ export async function sendVibePrompt(
   })
 
   // Step 1: Thinking
+  const step1Id = crypto.randomUUID()
   onStep({
-    id: crypto.randomUUID(),
+    id: step1Id,
     type: 'thinking',
     title: 'Menganalisis permintaan Anda...',
     content: `Permintaan: "${prompt}"`,
@@ -382,6 +383,18 @@ export async function sendVibePrompt(
     type: 'read_files',
     title: 'Menyusun struktur komponen UI',
     content: 'Menganalisis kebutuhan struktur, layout, dan styling',
+    timestamp: new Date().toLocaleTimeString(),
+    status: 'completed',
+    agentGroup: 'thinker',
+    pipelinePhase: 'thinking',
+  })
+
+  // Step 1 Finish — mark thinking as completed
+  onStep({
+    id: step1Id,
+    type: 'thinking',
+    title: 'Analisis selesai',
+    content: `Permintaan: "${prompt}"`,
     timestamp: new Date().toLocaleTimeString(),
     status: 'completed',
     agentGroup: 'thinker',

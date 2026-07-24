@@ -195,33 +195,48 @@ export function App() {
     const controller = new AbortController()
     abortControllerRef.current = controller
 
-    await sendVibeCodingPrompt({
-      prompt,
-      providerConfig: { ...providerConfig, selectedModel },
-      onStep: (newStep) => {
-        setSteps((prevSteps) => {
-          const existingIdx = prevSteps.findIndex((s) => s.id === newStep.id)
-          const updated = [...prevSteps]
-          if (existingIdx >= 0) {
-            updated[existingIdx] = newStep
-          } else {
-            updated.push(newStep)
-          }
-          return updated
-        })
-      },
-      onGeneratedHtml: (newHtml) => {
-        addDebugLog('success', 'PARSER', `[App] setGeneratedHtml dipanggil secara langsung! Length: ${newHtml.length}`)
-        setGeneratedHtml(newHtml)
-        setGenerationVersion((v) => v + 1)
-      },
-      currentHtml: generatedHtml,
-      signal: controller.signal,
-      chatHistory,
-    })
-
-    abortControllerRef.current = null
-    setIsRunning(false)
+    try {
+      await sendVibeCodingPrompt({
+        prompt,
+        providerConfig: { ...providerConfig, selectedModel },
+        onStep: (newStep) => {
+          setSteps((prevSteps) => {
+            const existingIdx = prevSteps.findIndex((s) => s.id === newStep.id)
+            const updated = [...prevSteps]
+            if (existingIdx >= 0) {
+              updated[existingIdx] = newStep
+            } else {
+              updated.push(newStep)
+            }
+            return updated
+          })
+        },
+        onGeneratedHtml: (newHtml) => {
+          addDebugLog('success', 'PARSER', `[App] setGeneratedHtml dipanggil secara langsung! Length: ${newHtml.length}`)
+          setGeneratedHtml(newHtml)
+          setGenerationVersion((v) => v + 1)
+        },
+        currentHtml: generatedHtml,
+        signal: controller.signal,
+        chatHistory,
+      })
+    } catch (err: any) {
+      addDebugLog('error', 'LLM_RESPONSE', `[App] runPrompt error: ${err?.message}`, { error: err })
+      // Emit error step so UI shows feedback
+      setSteps((prev) => [...prev, {
+        id: crypto.randomUUID(),
+        type: 'error',
+        title: 'Error',
+        content: err?.message || 'Terjadi kesalahan saat memproses permintaan.',
+        timestamp: new Date().toLocaleTimeString(),
+        status: 'failed',
+        agentGroup: 'editor',
+        pipelinePhase: 'done',
+      }])
+    } finally {
+      abortControllerRef.current = null
+      setIsRunning(false)
+    }
   }
 
   // Prompt dari sidebar chat — bersihkan highlight iframe lalu jalankan
